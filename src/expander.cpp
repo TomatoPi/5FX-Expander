@@ -13,7 +13,7 @@ jack_port_t* midi_input_port = nullptr;
 jack_port_t* audio_left = nullptr;
 jack_port_t* audio_right = nullptr;
 
-std::set<std::pair<int, int>> notes_on;
+std::set<std::pair<int, int>> sustained_notes;
 bool sustain_on;
 
 LiquidSFZ::Synth synth;
@@ -30,44 +30,28 @@ int jack_callback(jack_nframes_t nframes, void* args) {
 
   nevents = jack_midi_get_event_count(in_buffer);
   for (i = 0; i < nevents; ++i) {
+
     if (jack_midi_event_get(&event, in_buffer, i)) {
       continue;
     }
     if (3 != event.size) {
       continue;
     }
+
+    int channel = event.buffer[0] & 0x0F;
+
     switch (event.buffer[0] & 0xF0) {
-
-    case 0x80:
-      if (!sustain_on) {
-        synth.add_event_note_off(
-          event.time, event.buffer[0] & 0x0F, event.buffer[1] & 0x7F);
-        notes_on.erase(std::make_pair(event.buffer[0] & 0x0F, event.buffer[1] & 0x7F));
-      }
+    case 0x90: synth.add_event_note_on(
+      event.time, channel, event.buffer[1], event.buffer[2]);
       break;
-
-    case 0x90:
-      synth.add_event_note_on(
-        event.time, event.buffer[0] & 0x0F, event.buffer[1] & 0x7F, event.buffer[2] & 0x7F);
-      notes_on.emplace(event.buffer[0] & 0x0F, event.buffer[1] & 0x7F);
+    case 0x80: synth.add_event_note_off(
+      event.time, channel, event.buffer[1]);
       break;
-
-    case 0xB0:
-      synth.add_event_cc(
-        event.time, event.buffer[0] & 0x7F, event.buffer[1] & 0x7F, event.buffer[2] & 0x7F);
-      if (event.buffer[1] == 0x40) {
-        sustain_on = 64 <= event.buffer[2];
-        if (!sustain_on) {
-          for (auto [channel, note] : notes_on) {
-            synth.add_event_note_off(event.time, channel, note);
-          }
-        }
-      }
+    case 0xb0: synth.add_event_cc(
+      event.time, channel, event.buffer[1], event.buffer[2]);
       break;
-
-    case 0xE0:
-      synth.add_event_pitch_bend(
-        event.time, event.buffer[0] & 0x7F, ((int)event.buffer[1] & 0x7F) | (((int)event.buffer[2] & 0x7F) << 7));
+    case 0xe0: synth.add_event_pitch_bend(
+      event.time, channel, event.buffer[1] + event.buffer[2] << 7);
       break;
     }
   }
@@ -116,12 +100,11 @@ int main(int argc, char const* argv[]) {
     throw std::string("Failed activate client");
   }
 
-  std::cout << "Client Activated" << std::endl;
+  std::cout << "Client Activated\n<< " << std::endl;
 
   bool run(true);
   do {
     std::string input;
-    std::cout << "<< " << std::endl;
     std::cin >> input;
     run = input != std::string("quit");
   } while (run);
