@@ -22,6 +22,7 @@ else()
 endif()
 
 link_libraries(JackWrap)
+link_libraries(jack)
 
 add_executable(5FX-Expander 
   src/expander.cpp)
