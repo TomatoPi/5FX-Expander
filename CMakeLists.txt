@@ -23,6 +23,8 @@ endif()
 
 link_libraries(JackWrap)
 link_libraries(jack)
+link_libraries(lo)
 
 add_executable(5FX-Expander 
   src/expander.cpp)
+install(TARGETS 5FX-Expander)

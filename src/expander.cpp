@@ -1,11 +1,18 @@
 #include <5FX/jackwrap.hpp>
 
+#include <sys/types.h>
+#include <unistd.h>
+
 #include <liquidsfz.hh>
 #include <jack/jack.h>
 #include <jack/midiport.h>
 
+#include <lo/lo_cpp.h>
+
 #include <iostream>
+#include <optional>
 #include <string>
+#include <regex>
 #include <set>
 
 jack_client_t* client = nullptr;
@@ -17,6 +24,11 @@ std::set<std::pair<int, int>> sustained_notes;
 bool sustain_on;
 
 LiquidSFZ::Synth synth;
+
+lo::ServerThread osc_server(9000);
+lo::Address nsm_server("");
+std::string nsm_url;
+bool has_nsm;
 
 int jack_callback(jack_nframes_t nframes, void* args) {
 
@@ -61,11 +73,35 @@ int jack_callback(jack_nframes_t nframes, void* args) {
   return 0;
 }
 
-int main(int argc, char const* argv[]) {
+std::optional<std::string> get_nsm_url(char const* env[]) {
+  std::regex regex("NSM_URL=(.*)");
+  std::cmatch match;
+  for (int i = 0; env && env[i]; ++i) {
+    if (std::regex_match(env[i], match, regex)) {
+      return std::make_optional(match[1]);
+    }
+  }
+  return std::nullopt;
+}
 
-  if (2 != argc) {
-    std::cout << "Usage : " << argv[0] << " <sfz file>" << std::endl;
-    exit(EXIT_FAILURE);
+int main(int argc, char const* argv[], char const* env[]) {
+
+  auto nsm = get_nsm_url(env);
+  has_nsm = nsm.has_value();
+  if (nsm.has_value()) {
+    nsm_url = nsm.value();
+    nsm_server = lo::Address(nsm_url);
+    std::cout << "Start under NSM session at : " << nsm_url << std::endl;
+    if (!osc_server.is_valid()) {
+      throw std::string("Failed open OSC Server");
+    }
+    osc_server.add_method("/nsm/client/open", "sss",
+      [](lo_arg** argv, int) -> void {
+        nsm_server.send("/reply", "ss", "/nsm/client/open", "OK");
+      });
+    osc_server.start();
+  } else {
+    std::cout << "Start in Standalone mode" << std::endl;
   }
 
   JackStatus status;
@@ -90,8 +126,9 @@ int main(int argc, char const* argv[]) {
   synth.set_sample_rate(samplerate);
   sustain_on = false;
 
-  std::cout << "Start loading : " << argv[1] << std::endl;
-  if (!synth.load(argv[1])) {
+  std::string sfzfile = "/home/tomato/Musique/samples/Pianos/SalamanderGrandPiano/SalamanderGrandPianoV3Retuned.sfz";
+  std::cout << "Start loading : " << sfzfile << std::endl;
+  if (!synth.load(sfzfile)) {
     throw std::string("Failed load SFZ file : ") + std::string(argv[1]);
   }
 
@@ -102,6 +139,12 @@ int main(int argc, char const* argv[]) {
 
   std::cout << "Client Activated\n<< " << std::endl;
 
+  if (has_nsm) {
+    nsm_server.send(
+      "/nsm/server/announce", "sssiii", 
+      "5FX-Expander", ":progress:", argv[0], 1, 1, getpid());
+  }
+
   bool run(true);
   do {
     std::string input;
@@ -111,6 +154,7 @@ int main(int argc, char const* argv[]) {
 
   jack_deactivate(client);
   jack_client_close(client);
+  osc_server.stop();
 
   return 0;
 }
