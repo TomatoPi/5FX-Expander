@@ -191,7 +191,6 @@ int main(int argc, char const* argv[], char const* env[]) {
     bool success(false);
     for (int i = 0; i < 5; ++i) {
       osc_server = std::make_unique<lo::ServerThread>(8000 + (std::rand() % 1000));
-      std::cout << "Port : " << osc_server->port() << std::endl;
       if (osc_server->is_valid()) {
         success = true;
         break;
@@ -255,9 +254,9 @@ int main(int argc, char const* argv[], char const* env[]) {
 
   if (has_nsm) {
     nsm_server->send("/reply", "ss", "/nsm/client/open", "OK");
+  } else {
+    std::cout << "Ready" << std::endl;
   }
-
-  std::cout << "Ready" << std::endl;
 
   bool run(true);
   do {
