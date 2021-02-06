@@ -21,6 +21,10 @@
 #include <regex>
 #include <set>
 
+#include <signal.h>
+
+std::atomic_flag run;
+
 jack_client_t* client = nullptr;
 jack_port_t* midi_input_port = nullptr;
 jack_port_t* audio_left = nullptr;
@@ -170,6 +174,10 @@ void load_sound_font(const std::string& file) {
   }
 }
 
+void sigkill(int) {
+  run.clear();
+}
+
 int main(int argc, char const* argv[], char const* env[]) {
 
   std::srand(std::time(nullptr));
@@ -258,12 +266,20 @@ int main(int argc, char const* argv[], char const* env[]) {
     std::cout << "Ready" << std::endl;
   }
 
-  bool run(true);
+  signal(SIGTERM, sigkill);
+
+  run.test_and_set();
   do {
-    std::string input;
-    std::cin >> input;
-    run = input != std::string("quit");
-  } while (run);
+    if (!has_nsm) {
+      std::string input;
+      std::cin >> input;
+      if (input != std::string("quit")) {
+        run.clear();
+      }
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  } while (run.test_and_set());
 
   jack_deactivate(client);
   jack_client_close(client);
