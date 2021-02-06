@@ -13,6 +13,7 @@
 #include <iostream>
 #include <optional>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <atomic>
 #include <thread>
@@ -27,8 +28,8 @@ jack_port_t* audio_right = nullptr;
 
 LiquidSFZ::Synth synth;
 
-lo::ServerThread osc_server(8000 + (std::rand() % 1000));
-lo::Address nsm_server("");
+std::unique_ptr<lo::ServerThread> osc_server;
+std::unique_ptr<lo::Address> nsm_server;
 std::string nsm_url;
 std::atomic_flag nsm_client_opened;
 bool has_nsm;
@@ -42,6 +43,18 @@ struct Session {
   std::string display_name;
   std::string client_id;
 } session;
+
+struct JackClientOpenFailure {};
+struct JackPortOpenFailure {};
+struct JackCallbackRegisterFailure {};
+struct JackClientActivationFailure {};
+
+struct FileOpenFailure { std::string path; };
+struct DirectoryCreationFailure { std::string path; };
+struct SoundFontLoadingFailure { std::string path; };
+
+struct HomeNotFound {};
+struct OSCServerOpenFailure {};
 
 int jack_callback(jack_nframes_t nframes, void* args) {
 
@@ -102,7 +115,7 @@ void open_jack_client(const std::string& name) {
   JackStatus status;
   client = jack_client_open(name.c_str(), JackNullOption, &status);
   if (!client) {
-    throw std::string("Failed open Client");
+    throw JackClientOpenFailure{};
   }
 
   midi_input_port = jack_port_register(client, "midi_in", JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
@@ -110,11 +123,11 @@ void open_jack_client(const std::string& name) {
   audio_right = jack_port_register(client, "out_2", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
 
   if (!midi_input_port || !audio_left || !audio_right) {
-    throw std::string("Failed open port");
+    throw JackPortOpenFailure{};
   }
 
   if (jack_set_process_callback(client, jack_callback, nullptr)) {
-    throw std::string("Failed register process callback");
+    throw JackCallbackRegisterFailure{};
   }
 }
 
@@ -123,39 +136,47 @@ Config default_config(const std::string& home) {
   config.sound_font = home + "/.sfz/Piano/SalamanderGrandPiano/SalamanderGrandPianoV3Retuned.sfz";
   return config;
 }
-Config load_config_file(const std::string& path) {
+Config load_config_file(const std::string& root) {
   Config config;
+  std::string path(root + "/config.cfg");
   std::ifstream file(path);
   if (file.fail()) {
-    throw std::string("Failed open config file") + path;
+    throw FileOpenFailure{ path };
   }
   file >> config.sound_font;
   file.close();
   return config;
 }
-void save_config(const Config& config, const std::string& path) {
+void save_config(const Config& config, const std::string& root) {
+  if (!std::filesystem::exists(root)) {
+    if (!std::filesystem::create_directory(root)) {
+      throw DirectoryCreationFailure{ root };
+    }
+  }
+  std::string path(root + "/config.cfg");
   std::ofstream file(path);
   if (file.fail()) {
-    throw std::string("Failed open file for write") + path;
+    throw FileOpenFailure{ path };
   }
   file << config.sound_font;
   file.close();
 }
 
 void load_sound_font(const std::string& file) {
-
   jack_nframes_t samplerate = jack_get_sample_rate(client);
   synth.set_sample_rate(samplerate);
   if (!synth.load(file)) {
-    throw std::string("Failed load SFZ file : ") + file;
+    throw SoundFontLoadingFailure{ file };
   }
 }
 
 int main(int argc, char const* argv[], char const* env[]) {
 
+  std::srand(std::time(nullptr));
+
   auto home = get_env("HOME", env);
   if (!home.has_value()) {
-    throw std::string("Unable to locate home directory");
+    throw HomeNotFound{};
   }
 
   auto nsm = get_env("NSM_URL", env);
@@ -163,34 +184,45 @@ int main(int argc, char const* argv[], char const* env[]) {
   if (nsm.has_value()) {
 
     /* Create connection to NSM server */
+
     nsm_url = nsm.value();
-    nsm_server = lo::Address(nsm_url);
+    nsm_server = std::make_unique<lo::Address>(nsm_url);
     std::cout << "Start under NSM session at : " << nsm_url << std::endl;
-    if (!osc_server.is_valid()) {
-      throw std::string("Failed open OSC Server");
+    bool success(false);
+    for (int i = 0; i < 5; ++i) {
+      osc_server = std::make_unique<lo::ServerThread>(8000 + (std::rand() % 1000));
+      std::cout << "Port : " << osc_server->port() << std::endl;
+      if (osc_server->is_valid()) {
+        success = true;
+        break;
+      }
     }
-    osc_server.add_method("/nsm/client/open", "sss",
+    if (!success) {
+      throw OSCServerOpenFailure{};
+    }
+
+    osc_server->add_method("/nsm/client/open", "sss",
       [](lo_arg** argv, int) -> void {
-        session.instance_path = argv[0]->s + "/config.cfg";
-        session.display_name = argv[1]->s;
-        session.client_id = argv[2]->s;
+        session.instance_path = &argv[0]->s;
+        session.display_name = &argv[1]->s;
+        session.client_id = &argv[2]->s;
         nsm_client_opened.clear();
       });
-    osc_server.add_method("/nsm/client/save", "",
+    osc_server->add_method("/nsm/client/save", "",
       [](lo_arg** argv, int) -> void {
         save_config(config, session.instance_path);
-        nsm_server.send("/reply", "ss", "/nsm/client/save", "OK");
+        nsm_server->send("/reply", "ss", "/nsm/client/save", "OK");
       });
-    osc_server.start();
+    osc_server->start();
 
     synth.set_progress_function(
       [](double progress) -> void {
-        nsm_server.send("/nsm/client/progress", "f", progress);
+        nsm_server->send("/nsm/client/progress", "f", progress);
       });
 
     /* Announce client and wait for response */
     nsm_client_opened.test_and_set();
-    nsm_server.send(
+    nsm_server->send(
       "/nsm/server/announce", "sssiii",
       "5FX-Expander", ":progress:", argv[0], 1, 1, getpid());
     while (nsm_client_opened.test_and_set()) {
@@ -207,7 +239,7 @@ int main(int argc, char const* argv[], char const* env[]) {
   } else {
     std::cout << "Start in Standalone mode" << std::endl;
 
-    session.instance_path = home.value() + "/.5FX/5FX-Expander/default.cfg";
+    session.instance_path = home.value() + "/.5FX/5FX-Expander/";
     session.client_id = "5FX-Expander";
     session.display_name = "5FX-Expander";
 
@@ -218,11 +250,11 @@ int main(int argc, char const* argv[], char const* env[]) {
   open_jack_client(session.client_id);
   load_sound_font(config.sound_font);
   if (jack_activate(client)) {
-    throw std::string("Failed activate client");
+    throw JackClientActivationFailure{};
   }
 
   if (has_nsm) {
-    nsm_server.send("/reply", "ss", "/nsm/client/open", "OK");
+    nsm_server->send("/reply", "ss", "/nsm/client/open", "OK");
   }
 
   std::cout << "Ready" << std::endl;
@@ -236,7 +268,7 @@ int main(int argc, char const* argv[], char const* env[]) {
 
   jack_deactivate(client);
   jack_client_close(client);
-  osc_server.stop();
+  osc_server->stop();
 
   return 0;
 }
