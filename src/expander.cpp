@@ -38,11 +38,13 @@ std::string nsm_url;
 std::atomic_flag nsm_client_opened;
 bool has_nsm;
 
-struct Config {
+struct Config
+{
   std::string sound_font;
 } config;
 
-struct Session {
+struct Session
+{
   std::string instance_path;
   std::string display_name;
   std::string client_id;
@@ -60,7 +62,8 @@ struct SoundFontLoadingFailure { std::string path; };
 struct HomeNotFound {};
 struct OSCServerOpenFailure {};
 
-int jack_callback(jack_nframes_t nframes, void* args) {
+int jack_callback(jack_nframes_t nframes, void* args)
+{
 
   void* in_buffer = jack_port_get_buffer(midi_input_port, nframes);
   float* out_buffer[2];
@@ -103,7 +106,8 @@ int jack_callback(jack_nframes_t nframes, void* args) {
   return 0;
 }
 
-std::optional<std::string> get_env(const std::string& var, char const* env[]) {
+std::optional<std::string> get_env(const std::string& var, char const* env[])
+{
   std::regex regex(var + "=(.*)");
   std::cmatch match;
   for (int i = 0; env && env[i]; ++i) {
@@ -114,7 +118,8 @@ std::optional<std::string> get_env(const std::string& var, char const* env[]) {
   return std::nullopt;
 }
 
-void open_jack_client(const std::string& name) {
+void open_jack_client(const std::string& name)
+{
 
   JackStatus status;
   client = jack_client_open(name.c_str(), JackNullOption, &status);
@@ -135,12 +140,14 @@ void open_jack_client(const std::string& name) {
   }
 }
 
-Config default_config(const std::string& home) {
+Config default_config(const std::string& home)
+{
   Config config;
   config.sound_font = home + "/.sfz/Piano/SalamanderGrandPiano/SalamanderGrandPianoV3Retuned.sfz";
   return config;
 }
-Config load_config_file(const std::string& root) {
+Config load_config_file(const std::string& root)
+{
   Config config;
   std::string path(root + "/config.cfg");
   std::ifstream file(path);
@@ -151,7 +158,8 @@ Config load_config_file(const std::string& root) {
   file.close();
   return config;
 }
-void save_config(const Config& config, const std::string& root) {
+void save_config(const Config& config, const std::string& root)
+{
   if (!std::filesystem::exists(root)) {
     if (!std::filesystem::create_directory(root)) {
       throw DirectoryCreationFailure{ root };
@@ -166,7 +174,8 @@ void save_config(const Config& config, const std::string& root) {
   file.close();
 }
 
-void load_sound_font(const std::string& file) {
+void load_sound_font(const std::string& file)
+{
   jack_nframes_t samplerate = jack_get_sample_rate(client);
   synth.set_sample_rate(samplerate);
   if (!synth.load(file)) {
@@ -174,11 +183,13 @@ void load_sound_font(const std::string& file) {
   }
 }
 
-void sigkill(int) {
+void sigkill(int)
+{
   run.clear();
 }
 
-int main(int argc, char const* argv[], char const* env[]) {
+int main(int argc, char const* argv[], char const* env[])
+{
 
   std::srand(std::time(nullptr));
 
@@ -209,21 +220,24 @@ int main(int argc, char const* argv[], char const* env[]) {
     }
 
     osc_server->add_method("/nsm/client/open", "sss",
-      [](lo_arg** argv, int) -> void {
+      [](lo_arg** argv, int) -> void
+      {
         session.instance_path = &argv[0]->s;
         session.display_name = &argv[1]->s;
         session.client_id = &argv[2]->s;
         nsm_client_opened.clear();
       });
     osc_server->add_method("/nsm/client/save", "",
-      [](lo_arg** argv, int) -> void {
+      [](lo_arg** argv, int) -> void
+      {
         save_config(config, session.instance_path);
         nsm_server->send("/reply", "ss", "/nsm/client/save", "OK");
       });
     osc_server->start();
 
     synth.set_progress_function(
-      [](double progress) -> void {
+      [](double progress) -> void
+      {
         nsm_server->send("/nsm/client/progress", "f", progress);
       });
 
